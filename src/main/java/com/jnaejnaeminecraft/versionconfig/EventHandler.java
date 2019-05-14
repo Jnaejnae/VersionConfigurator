@@ -16,15 +16,21 @@
 
 package com.jnaejnaeminecraft.versionconfig;
 
+import java.util.List;
 import java.util.Random;
 
+import javax.annotation.Nullable;
+
+import com.google.common.base.Predicate;
 import com.jnaejnaeminecraft.versionconfig.init.ModBlocks;
 import com.jnaejnaeminecraft.versionconfig.init.ModConfig;
 import com.jnaejnaeminecraft.versionconfig.init.ModEnchantments;
 import com.jnaejnaeminecraft.versionconfig.init.ModItems;
 import com.jnaejnaeminecraft.versionconfig.init.ModTriggers;
 
+import net.minecraft.block.BlockHorizontal;
 import net.minecraft.block.material.Material;
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.entity.Entity;
@@ -37,6 +43,7 @@ import net.minecraft.entity.monster.EntityEndermite;
 import net.minecraft.entity.monster.EntityEvoker;
 import net.minecraft.entity.monster.EntityGuardian;
 import net.minecraft.entity.monster.EntityHusk;
+import net.minecraft.entity.monster.EntityMob;
 import net.minecraft.entity.monster.EntityPigZombie;
 import net.minecraft.entity.monster.EntityPolarBear;
 import net.minecraft.entity.monster.EntityShulker;
@@ -61,15 +68,21 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraft.util.DamageSource;
+import net.minecraft.util.EnumFacing;
 import net.minecraft.util.EnumParticleTypes;
+import net.minecraft.util.math.AxisAlignedBB;
+import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.event.entity.EntityJoinWorldEvent;
 import net.minecraftforge.event.entity.living.LivingDropsEvent;
 import net.minecraftforge.event.entity.living.LivingExperienceDropEvent;
 import net.minecraftforge.event.entity.living.LivingFallEvent;
+import net.minecraftforge.event.entity.player.CriticalHitEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent.NameFormat;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent.RightClickBlock;
+import net.minecraftforge.event.entity.player.PlayerSleepInBedEvent;
 import net.minecraftforge.fml.client.event.ConfigChangedEvent.OnConfigChangedEvent;
 import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
+import net.minecraftforge.fml.common.eventhandler.Event.Result;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent.PlayerTickEvent;
@@ -1114,7 +1127,7 @@ public class EventHandler
  * @param event the event
  */
 @SubscribeEvent(priority = EventPriority.NORMAL, receiveCanceled = true)
-    public static void onEvent(LivingFallEvent event)
+public static void onEvent(LivingFallEvent event)
     {
         if (event.getEntityLiving() instanceof EntityPlayer)
         {
@@ -1186,7 +1199,7 @@ public class EventHandler
             EntityPlayerMP thePlayerMP = (EntityPlayerMP)thePlayer;
             
             // DEBUG
-            System.out.println("Right clicking block with "+thePlayer.getHeldItem(event.getHand()));
+            // System.out.println("Right clicking block with "+thePlayer.getHeldItem(event.getHand()));
    
             if (thePlayer.getHeldItem(event.getHand()).getItem() == ModBlocks.item_block_cloud_sapling)
             {
@@ -1380,5 +1393,93 @@ public class EventHandler
         	event.setCanceled(true);
         	System.out.println("Cancelling Spawn");
     	}
+    }
+    
+    @SubscribeEvent(priority = EventPriority.NORMAL, receiveCanceled = true)
+    public static void onEvent(CriticalHitEvent event)
+    {
+    	if (!ModConfig.allowCriticalHit)
+    	{
+        	event.setResult(Result.DENY);
+        	System.out.println("Cancelling Critical Hit ");
+    	}
+    }
+    
+    @SubscribeEvent(priority = EventPriority.NORMAL, receiveCanceled = true)
+    public static void onEvent(PlayerSleepInBedEvent event)
+    {
+    	System.out.println("Bed Event");
+    	BlockPos bedLocation = event.getPos();
+    	EntityPlayer thePlayer = event.getEntityPlayer();
+        final IBlockState state = thePlayer.world.isBlockLoaded(bedLocation) ? thePlayer.world.getBlockState(bedLocation) : null;
+        final boolean isBed = state != null && state.getBlock().isBed(state, thePlayer.world, bedLocation, thePlayer);
+        final EnumFacing enumfacing = isBed && state.getBlock() instanceof BlockHorizontal ? (EnumFacing)state.getValue(BlockHorizontal.FACING) : null;
+
+        if (!thePlayer.world.isRemote)
+        {
+            if (thePlayer.isPlayerSleeping() || !thePlayer.isEntityAlive())
+            {
+                event.setResult(EntityPlayer.SleepResult.OTHER_PROBLEM);
+                return;
+            }
+
+            if (!thePlayer.world.provider.isSurfaceWorld())
+            {
+            	event.setResult(EntityPlayer.SleepResult.NOT_POSSIBLE_HERE);
+            	return;
+            }
+
+            if (!net.minecraftforge.event.ForgeEventFactory.fireSleepingTimeCheck(thePlayer, bedLocation))
+            {
+            	event.setResult(EntityPlayer.SleepResult.NOT_POSSIBLE_NOW);
+            	return;
+            }
+
+            if (!bedInRange(thePlayer, bedLocation, enumfacing))
+            {
+            	event.setResult(EntityPlayer.SleepResult.TOO_FAR_AWAY);
+            	System.out.println("Bed Too Far Away!");
+            	return;
+            }
+            List<EntityMob> list = thePlayer.world.<EntityMob>getEntitiesWithinAABB(EntityMob.class, new AxisAlignedBB((double)bedLocation.getX() - 8.0D, (double)bedLocation.getY() - 5.0D, (double)bedLocation.getZ() - 8.0D, (double)bedLocation.getX() + 8.0D, (double)bedLocation.getY() + 5.0D, (double)bedLocation.getZ() + 8.0D), new SleepEnemyPredicate(thePlayer));
+
+            if (!list.isEmpty())
+            {
+            	event.setResult(EntityPlayer.SleepResult.NOT_SAFE);
+            	return;
+            }
+        }
+        event.setResult(EntityPlayer.SleepResult.OK);
+        System.out.println("Bed Ok");
+        return;
+    }
+    
+    private static boolean bedInRange(EntityPlayer parPlayer, BlockPos parBedPos, EnumFacing parFacing)
+    {
+        if (Math.abs(parPlayer.posX - (double)parBedPos.getX()) <= 3.0D && Math.abs(parPlayer.posY - (double)parBedPos.getY()) <= 2.0D && Math.abs(parPlayer.posZ - (double)parBedPos.getZ()) <= 3.0D)
+        {
+            return true;
+        }
+        else if (parFacing == null) return false;
+        else
+        {
+            BlockPos blockpos = parBedPos.offset(parFacing.getOpposite());
+            return Math.abs(parPlayer.posX - (double)blockpos.getX()) <= 3.0D && Math.abs(parPlayer.posY - (double)blockpos.getY()) <= 2.0D && Math.abs(parPlayer.posZ - (double)blockpos.getZ()) <= 3.0D;
+        }
+    }
+
+    static class SleepEnemyPredicate implements Predicate<EntityMob>
+    {
+        private final EntityPlayer player;
+
+        private SleepEnemyPredicate(EntityPlayer playerIn)
+        {
+            this.player = playerIn;
+        }
+
+        public boolean apply(@Nullable EntityMob p_apply_1_)
+        {
+            return p_apply_1_.isPreventingPlayerRest(this.player);
+        }
     }
 }
